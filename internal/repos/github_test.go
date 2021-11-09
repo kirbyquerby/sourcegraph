@@ -40,6 +40,7 @@ func TestExampleRepositoryQuerySplit(t *testing.T) {
 
 func TestGithubSource_GetRepo(t *testing.T) {
 	testCases := []struct {
+		enterprise    bool
 		name          string
 		nameWithOwner string
 		assert        func(*testing.T, *types.Repo)
@@ -85,7 +86,52 @@ func TestGithubSource_GetRepo(t *testing.T) {
 						URL:            "https://github.com/sourcegraph/sourcegraph",
 						StargazerCount: 2220,
 						ForkCount:      164,
-						Visibility:     "public",
+						// We're hitting github.com here, so visibility will be empty irrespective
+						// of repository type. This is a GitHub enterprise only feature.
+						Visibility: "",
+					},
+				}
+
+				if !reflect.DeepEqual(have, want) {
+					t.Errorf("response: %s", cmp.Diff(have, want))
+				}
+			},
+			err: "<nil>",
+		},
+		{
+			enterprise:    true,
+			name:          "internal repo in github enterprise",
+			nameWithOwner: "admiring-austin-120/fluffy-enigma",
+			assert: func(t *testing.T, have *types.Repo) {
+				t.Helper()
+
+				want := &types.Repo{
+					Name:        "ghe.sgdev.org/admiring-austin-120/fluffy-enigma",
+					Description: "Internal repo used in tests in sourcegraph code.",
+					URI:         "github.com/sourcegraph/sourcegraph",
+					Stars:       0,
+					ExternalRepo: api.ExternalRepoSpec{
+						ID:          "MDEyOk9yZ2FuaXphdGlvbjE2MTA=",
+						ServiceType: "github",
+						ServiceID:   "https://ghe.sgdev.org/",
+					},
+					Sources: map[string]*types.SourceInfo{
+						"extsvc:github:0": {
+							ID:       "extsvc:github:0",
+							CloneURL: "https://ghe.sgdev.org/admiring-austin-120/fluffy-enigma",
+						},
+					},
+					Metadata: &github.Repository{
+						ID:             "MDEyOk9yZ2FuaXphdGlvbjE2MTA=",
+						DatabaseID:     41288708,
+						NameWithOwner:  "admiring-austin-120/fluffy-enigma",
+						Description:    "Internal repo used in tests in sourcegraph code.",
+						URL:            "https://github.com/admiring-austin-120/fluffy-enigma",
+						StargazerCount: 0,
+						ForkCount:      0,
+						// We're hitting github.com here, so visibility will be empty irrespective
+						// of repository type. This is a GitHub enterprise only feature.
+						Visibility: "internal",
 					},
 				}
 
@@ -113,11 +159,24 @@ func TestGithubSource_GetRepo(t *testing.T) {
 			lg := log15.New()
 			lg.SetHandler(log15.DiscardHandler())
 
-			svc := &types.ExternalService{
-				Kind: extsvc.KindGitHub,
-				Config: marshalJSON(t, &schema.GitHubConnection{
-					Url: "https://github.com",
-				}),
+			var svc *types.ExternalService
+
+			if tc.enterprise {
+				gheToken := os.Getenv("GHE_TOKEN")
+				svc = &types.ExternalService{
+					Kind: extsvc.KindGitHub,
+					Config: marshalJSON(t, &schema.GitHubConnection{
+						Url:   "https://ghe.sgdev.org",
+						Token: gheToken,
+					}),
+				}
+			} else {
+				svc = &types.ExternalService{
+					Kind: extsvc.KindGitHub,
+					Config: marshalJSON(t, &schema.GitHubConnection{
+						Url: "https://github.com",
+					}),
+				}
 			}
 
 			githubSrc, err := NewGithubSource(svc, cf)

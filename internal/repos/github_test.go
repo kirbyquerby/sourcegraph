@@ -162,7 +162,13 @@ func TestGithubSource_GetRepo(t *testing.T) {
 			var svc *types.ExternalService
 
 			if tc.enterprise {
+				rcache.SetupForTest(t)
+				fixtureName := "githubenterprise-getrepo"
 				gheToken := os.Getenv("GHE_TOKEN")
+				if update(fixtureName) && gheToken == "" {
+					t.Fatalf("GHE_TOKEN needs to be set to a token that can access ghe.sgdev.org to update this test fixture")
+				}
+
 				svc = &types.ExternalService{
 					Kind: extsvc.KindGitHub,
 					Config: marshalJSON(t, &schema.GitHubConnection{

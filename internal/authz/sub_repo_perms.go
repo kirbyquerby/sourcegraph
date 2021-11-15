@@ -3,9 +3,13 @@ package authz
 import (
 	"context"
 	"path"
+	"strconv"
+	"time"
 
 	"github.com/cockroachdb/errors"
 	"github.com/gobwas/glob"
+	lru "github.com/hashicorp/golang-lru"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/sourcegraph/sourcegraph/internal/actor"
 	"github.com/sourcegraph/sourcegraph/internal/api"
@@ -48,7 +52,15 @@ type SubRepoPermissionsGetter interface {
 // SubRepoPermsClient is a concrete implementation of SubRepoPermissionChecker.
 type SubRepoPermsClient struct {
 	permissionsGetter SubRepoPermissionsGetter
+	clock             func() time.Time
+	since             func(time.Time) time.Duration
+
+	group *singleflight.Group
+	cache *lru.Cache
 }
+
+const defaultCacheSize = 1000
+const cacheTTL = 10 * time.Second
 
 // NewSubRepoPermsClient instantiates an instance of authz.SubRepoPermsClient
 // which implements SubRepoPermissionChecker.
@@ -61,9 +73,29 @@ type SubRepoPermsClient struct {
 //
 // Note that sub-repo permissions are currently opt-in via the
 // experimentalFeatures.enableSubRepoPermissions option.
-func NewSubRepoPermsClient(permissionsGetter SubRepoPermissionsGetter) *SubRepoPermsClient {
+func NewSubRepoPermsClient(permissionsGetter SubRepoPermissionsGetter) (*SubRepoPermsClient, error) {
+	cache, err := lru.New(defaultCacheSize)
+	if err != nil {
+		return nil, errors.Wrap(err, "creating LRU cache")
+	}
 	return &SubRepoPermsClient{
 		permissionsGetter: permissionsGetter,
+		clock:             time.Now,
+		since:             time.Since,
+		group:             &singleflight.Group{},
+		cache:             cache,
+	}, nil
+}
+
+// WithGetter returns a new instance that uses the supplied getter. The cache
+// from the original instance is left intact.
+func (s *SubRepoPermsClient) WithGetter(g SubRepoPermissionsGetter) *SubRepoPermsClient {
+	return &SubRepoPermsClient{
+		permissionsGetter: g,
+		clock:             s.clock,
+		since:             s.since,
+		group:             s.group,
+		cache:             s.cache,
 	}
 }
 
@@ -90,9 +122,25 @@ func (s *SubRepoPermsClient) Permissions(ctx context.Context, userID int32, cont
 		return Read, nil
 	}
 
-	srp, err := s.permissionsGetter.GetByUser(ctx, userID)
-	if err != nil {
-		return None, errors.Wrap(err, "getting permissions")
+	var srp map[api.RepoName]SubRepoPermissions
+	item, _ := s.cache.Get(userID)
+	cached, ok := item.(cachedPermissions)
+	if !ok || s.since(cached.timestamp) > cacheTTL {
+		// Ensure that when refreshing the cache we only make one request
+		result, err, _ := s.group.Do(strconv.FormatInt(int64(userID), 10), func() (interface{}, error) {
+			return s.permissionsGetter.GetByUser(ctx, userID)
+		})
+		if err != nil {
+			return None, errors.Wrap(err, "getting permissions")
+		}
+		srp = result.(map[api.RepoName]SubRepoPermissions)
+		s.cache.Add(userID, cachedPermissions{
+			perms:     srp,
+			timestamp: s.clock(),
+		})
+	} else {
+		// In cache and not expired
+		srp = cached.perms
 	}
 
 	// Check repo
@@ -105,7 +153,6 @@ func (s *SubRepoPermsClient) Permissions(ctx context.Context, userID int32, cont
 		return Read, nil
 	}
 
-	// TODO: This will be very slow until we can cache compiled rules
 	includeMatchers := make([]glob.Glob, 0, len(repoRules.PathIncludes))
 	for _, rule := range repoRules.PathIncludes {
 		g, err := glob.Compile(rule, '/')
@@ -146,6 +193,11 @@ func (s *SubRepoPermsClient) Permissions(ctx context.Context, userID int32, cont
 func (s *SubRepoPermsClient) Enabled() bool {
 	c := conf.Get()
 	return c.ExperimentalFeatures != nil && c.ExperimentalFeatures.EnableSubRepoPermissions
+}
+
+type cachedPermissions struct {
+	perms     map[api.RepoName]SubRepoPermissions
+	timestamp time.Time
 }
 
 // CurrentUserPermissions returns the level of access the authenticated user within

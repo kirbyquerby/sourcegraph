@@ -15,6 +15,7 @@ func TestParser(t *testing.T) {
 	if _, err := exec.LookPath(ctagsCommand); err != nil {
 		t.Skip("command not in PATH: universal-ctags")
 	}
+	// t.Skip("broken test??")
 
 	p, err := NewParser()
 	if err != nil {
@@ -48,6 +49,13 @@ class A implements B extends C {
 				Language: "Java",
 				Line:     2,
 				Name:     "com.sourcegraph",
+				Path:     "com/sourcegraph/A.java",
+			},
+			{
+				Kind:     "classes",
+				Language: "Java",
+				Line:     4,
+				Name:     "A",
 				Path:     "com/sourcegraph/A.java",
 			},
 			{

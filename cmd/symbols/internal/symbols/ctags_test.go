@@ -15,6 +15,7 @@ func TestParser(t *testing.T) {
 	if _, err := exec.LookPath(ctagsCommand); err != nil {
 		t.Skip("command not in PATH: universal-ctags")
 	}
+	// trigger benchmarks
 	// t.Skip("broken test??")
 
 	p, err := NewParser()

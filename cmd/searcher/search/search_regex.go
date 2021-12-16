@@ -299,6 +299,7 @@ func (rg *readerGrep) FindZip(zf *store.ZipFile, f *store.SrcFile, limit int) (p
 func regexSearchBatch(ctx context.Context, rg *readerGrep, zf *store.ZipFile, limit int, patternMatchesContent, patternMatchesPaths bool, isPatternNegated bool) ([]protocol.FileMatch, bool, error) {
 	ctx, cancel, sender := newLimitedStreamCollector(ctx, limit)
 	defer cancel()
+	time.Sleep(20 * time.Millisecond)
 	err := regexSearch(ctx, rg, zf, limit, patternMatchesContent, patternMatchesPaths, isPatternNegated, sender)
 	return sender.Collected(), sender.LimitHit(), err
 }
